@@ -1,0 +1,205 @@
+<?xml version="1.0" encoding="utf-8"?>
+<RelativeLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent">
+
+
+    <include android:id="@+id/infoappbar" layout="@layout/deleco_app_bar"></include>
+
+    <LinearLayout
+        android:layout_below="@+id/infoappbar"
+        android:id="@+id/info_options_layout"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:elevation="1mm"
+        android:gravity="center"
+        android:orientation="horizontal"
+        >
+
+        <ImageButton
+            android:layout_marginStart="15dp"
+            android:id="@+id/information_go_back_button"
+            android:layout_width="35dp"
+            android:layout_height="40dp"
+            android:background="@drawable/ic_left_arrow" />
+
+        <LinearLayout
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_gravity="center"
+            android:layout_weight="2.5"
+            android:orientation="vertical">
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="0dp"
+                android:layout_weight="1"
+                android:gravity="center"
+                android:text="TCS-01"
+                android:textSize="20sp"
+                android:textStyle="bold"
+                android:fontFamily="@font/phagspa"
+                tools:layout_editor_absoluteY="83dp" />
+
+            <TextView
+                android:id="@+id/info_textView_stage"
+                android:layout_width="match_parent"
+                android:layout_height="0dp"
+                android:layout_weight="1"
+                android:gravity="center"
+                android:text="Inmadura"
+                android:textSize="20sp"
+                android:textStyle="bold"
+                android:fontFamily="@font/phagspa"
+                tools:layout_editor_absoluteX="175dp"
+                tools:layout_editor_absoluteY="116dp" />
+
+        </LinearLayout>
+
+        <ImageButton
+            android:layout_marginEnd="15dp"
+            android:id="@+id/information_about_us"
+            android:layout_width="35dp"
+            android:layout_height="40dp"
+            android:background="@drawable/ic_about_us" />
+    </LinearLayout>
+
+
+    <ImageView
+        android:layout_below="@+id/info_options_layout"
+        android:id="@+id/info_imageView_pod"
+        android:layout_width="match_parent"
+        android:layout_height="240dp"
+        android:layout_marginTop="20dp"
+        android:src="@drawable/mazorcainmadura" />
+
+    <LinearLayout
+        android:layout_below="@+id/info_imageView_pod"
+        android:id="@+id/info_stages_layout"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="10dp"
+        android:elevation="1mm"
+        android:gravity="center"
+        android:orientation="horizontal"
+        >
+
+        <Button
+            android:layout_marginEnd="10dp"
+            android:layout_width="50dp"
+            android:layout_height="50dp"
+            android:background="@drawable/roud_button"
+            android:text="1" />
+        <Button
+            android:layout_width="50dp"
+            android:layout_height="50dp"
+            android:layout_marginEnd="10dp"
+            android:background="@drawable/roud_button2"
+            android:text="2" />
+
+        <Button
+            android:layout_width="50dp"
+            android:layout_height="50dp"
+            android:layout_marginEnd="10dp"
+            android:background="@drawable/roud_button3"
+            android:text="3" />
+    </LinearLayout>
+
+    <LinearLayout
+        android:background="@drawable/layout_shadow"
+        android:layout_below="@+id/info_stages_layout"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:layout_marginTop="10dp"
+        android:gravity="center"
+        android:orientation="vertical"
+        >
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="0dp"
+            android:layout_weight="1"
+            android:fontFamily="@font/phagspa"
+            android:text="Tiempo de madurez"
+            android:textSize="20sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="0dp"
+            android:layout_weight="1"
+            android:fontFamily="@font/phagspa"
+            android:text="Tiempo de madurez"
+            android:textSize="18sp"
+
+            />
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="0dp"
+            android:layout_weight="1"
+            android:fontFamily="@font/phagspa"
+            android:text="Tiempo de madurez"
+            android:textSize="20sp"
+            android:textStyle="bold"
+
+            />
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="0dp"
+            android:layout_weight="1"
+            android:fontFamily="@font/phagspa"
+            android:text="Tiempo de madurez"
+            android:textSize="18sp" />
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="0dp"
+            android:layout_gravity="center"
+            android:layout_weight="1"
+            android:fontFamily="@font/phagspa"
+            android:text="Tiempo de madurez"
+            android:textSize="20sp"
+            android:textStyle="bold"
+
+            />
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="0dp"
+            android:layout_gravity="center"
+            android:layout_weight="1"
+            android:fontFamily="@font/phagspa"
+            android:text="Tiempo de madurez"
+            android:textSize="18sp"
+
+            />
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="0dp"
+            android:layout_weight="1"
+            android:fontFamily="@font/phagspa"
+            android:text="Tiempo de madurez"
+            android:textSize="20sp"
+            android:textStyle="bold"
+
+            />
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="0dp"
+            android:layout_gravity="center"
+            android:layout_weight="1"
+            android:fontFamily="@font/phagspa"
+            android:text="Tiempo de madurez"
+            android:textSize="18sp"
+
+            />
+    </LinearLayout>
+
+
+</RelativeLayout>

@@ -17,15 +17,18 @@
 package com.deleco.app;
 
 import android.Manifest;
+import android.annotation.SuppressLint;
 import android.app.Activity;
 import android.app.Fragment;
 import android.content.Context;
+import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.hardware.Camera;
 import android.hardware.camera2.CameraAccessException;
 import android.hardware.camera2.CameraCharacteristics;
 import android.hardware.camera2.CameraManager;
 import android.hardware.camera2.params.StreamConfigurationMap;
+import android.location.Location;
 import android.media.Image;
 import android.media.Image.Plane;
 import android.media.ImageReader;
@@ -35,423 +38,514 @@ import android.os.Bundle;
 import android.os.Handler;
 import android.os.HandlerThread;
 import android.os.Trace;
+import android.util.Log;
 import android.util.Size;
 import android.view.KeyEvent;
 import android.view.Surface;
+import android.view.View;
 import android.view.WindowManager;
+import android.widget.ImageButton;
+import android.widget.TextView;
 import android.widget.Toast;
-import java.nio.ByteBuffer;
+
+import com.android.volley.Request;
+import com.android.volley.Response;
+import com.android.volley.VolleyError;
+import com.android.volley.toolbox.JsonObjectRequest;
 import com.deleco.app.env.ImageUtils;
 import com.deleco.app.env.Logger;
-import com.deleco.app.R; // Explicit import needed for internal Google builds.
+import com.deleco.app.helper.RequestManager;
+import com.deleco.app.model.Weather;
+import com.google.android.gms.location.FusedLocationProviderClient;
+import com.google.android.gms.location.LocationServices;
+import com.google.android.gms.tasks.OnSuccessListener;
+import com.google.gson.Gson;
+
+import org.json.JSONObject;
+
+import java.nio.ByteBuffer;
+
 
 public abstract class CameraActivity extends Activity
-    implements OnImageAvailableListener, Camera.PreviewCallback {
-  private static final Logger LOGGER = new Logger();
+        implements OnImageAvailableListener, Camera.PreviewCallback {
+    private static final Logger LOGGER = new Logger();
 
-  private static final int PERMISSIONS_REQUEST = 1;
+    private static final int PERMISSIONS_REQUEST = 1;
 
-  private static final String PERMISSION_CAMERA = Manifest.permission.CAMERA;
-  private static final String PERMISSION_STORAGE = Manifest.permission.WRITE_EXTERNAL_STORAGE;
+    private static final String PERMISSION_CAMERA = Manifest.permission.CAMERA;
+    private static final String PERMISSION_STORAGE = Manifest.permission.WRITE_EXTERNAL_STORAGE;
+    private static final String PERMISSION_LOCATION = Manifest.permission.ACCESS_COARSE_LOCATION;
 
-  private boolean debug = false;
+    private boolean debug = false;
 
-  private Handler handler;
-  private HandlerThread handlerThread;
-  private boolean useCamera2API;
-  private boolean isProcessingFrame = false;
-  private byte[][] yuvBytes = new byte[3][];
-  private int[] rgbBytes = null;
-  private int yRowStride;
+    private Handler handler;
+    private HandlerThread handlerThread;
+    private boolean useCamera2API;
+    private boolean isProcessingFrame = false;
+    private byte[][] yuvBytes = new byte[3][];
+    private int[] rgbBytes = null;
+    private int yRowStride;
 
-  protected int previewWidth = 0;
-  protected int previewHeight = 0;
+    protected int previewWidth = 0;
+    protected int previewHeight = 0;
 
-  private Runnable postInferenceCallback;
-  private Runnable imageConverter;
+    private Runnable postInferenceCallback;
+    private Runnable imageConverter;
 
-  @Override
-  protected void onCreate(final Bundle savedInstanceState) {
-    LOGGER.d("onCreate " + this);
-    super.onCreate(null);
-    getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+    private FusedLocationProviderClient fusedLocationClient;
 
-    setContentView(R.layout.activity_camera);
+    String TAG = "ActivityCamera";
 
-    if (hasPermission()) {
-      setFragment();
-    } else {
-      requestPermission();
-    }
-  }
+    @Override
+    protected void onCreate(final Bundle savedInstanceState) {
+        LOGGER.d("onCreate " + this);
+        super.onCreate(null);
+        getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+        setContentView(R.layout.activity_camera);
+        fusedLocationClient = LocationServices.getFusedLocationProviderClient(this);
 
-  private byte[] lastPreviewFrame;
+        final RequestManager requestManager = RequestManager.getInstance(this);
 
-  protected int[] getRgbBytes() {
-    imageConverter.run();
-    return rgbBytes;
-  }
 
-  protected int getLuminanceStride() {
-    return yRowStride;
-  }
+        @SuppressLint("WrongViewCast") ImageButton info = findViewById(R.id.camera_btn_info);
+        @SuppressLint("WrongViewCast") ImageButton refresh = findViewById(R.id.camera_btn_refresh);
+        final TextView Temp = findViewById(R.id.camera_temperature);
+        final TextView Alt = findViewById(R.id.camera_altitude);
+        final TextView Hum = findViewById(R.id.camera_humidity);
 
-  protected byte[] getLuminance() {
-    return yuvBytes[0];
-  }
 
-  /**
-   * Callback for android.hardware.Camera API
-   */
-  @Override
-  public void onPreviewFrame(final byte[] bytes, final Camera camera) {
-    if (isProcessingFrame) {
-      LOGGER.w("Dropping frame!");
-      return;
-    }
-
-    try {
-      // Initialize the storage bitmaps once when the resolution is known.
-      if (rgbBytes == null) {
-        Camera.Size previewSize = camera.getParameters().getPreviewSize();
-        previewHeight = previewSize.height;
-        previewWidth = previewSize.width;
-        rgbBytes = new int[previewWidth * previewHeight];
-        onPreviewSizeChosen(new Size(previewSize.width, previewSize.height), 90);
-      }
-    } catch (final Exception e) {
-      LOGGER.e(e, "Exception!");
-      return;
-    }
-
-    isProcessingFrame = true;
-    lastPreviewFrame = bytes;
-    yuvBytes[0] = bytes;
-    yRowStride = previewWidth;
-
-    imageConverter =
-        new Runnable() {
-          @Override
-          public void run() {
-            ImageUtils.convertYUV420SPToARGB8888(bytes, previewWidth, previewHeight, rgbBytes);
-          }
-        };
-
-    postInferenceCallback =
-        new Runnable() {
-          @Override
-          public void run() {
-            camera.addCallbackBuffer(bytes);
-            isProcessingFrame = false;
-          }
-        };
-    processImage();
-  }
-
-  /**
-   * Callback for Camera2 API
-   */
-  @Override
-  public void onImageAvailable(final ImageReader reader) {
-    //We need wait until we have some size from onPreviewSizeChosen
-    if (previewWidth == 0 || previewHeight == 0) {
-      return;
-    }
-    if (rgbBytes == null) {
-      rgbBytes = new int[previewWidth * previewHeight];
-    }
-    try {
-      final Image image = reader.acquireLatestImage();
-
-      if (image == null) {
-        return;
-      }
-
-      if (isProcessingFrame) {
-        image.close();
-        return;
-      }
-      isProcessingFrame = true;
-      Trace.beginSection("imageAvailable");
-      final Plane[] planes = image.getPlanes();
-      fillBytes(planes, yuvBytes);
-      yRowStride = planes[0].getRowStride();
-      final int uvRowStride = planes[1].getRowStride();
-      final int uvPixelStride = planes[1].getPixelStride();
-
-      imageConverter =
-          new Runnable() {
+        info.setOnClickListener(new View.OnClickListener() {
             @Override
-            public void run() {
-              ImageUtils.convertYUV420ToARGB8888(
-                  yuvBytes[0],
-                  yuvBytes[1],
-                  yuvBytes[2],
-                  previewWidth,
-                  previewHeight,
-                  yRowStride,
-                  uvRowStride,
-                  uvPixelStride,
-                  rgbBytes);
+            public void onClick(View view) {
+                Intent intent = new Intent(getApplicationContext(), InformationActivity.class);
+                //intent.putExtra(EXTRA_MESSAGE, message);
+                startActivity(intent);
             }
-          };
+        });
 
-      postInferenceCallback =
-          new Runnable() {
+        setUIData(Hum, Alt, Temp, requestManager);
+
+        refresh.setOnClickListener(new View.OnClickListener() {
             @Override
-            public void run() {
-              image.close();
-              isProcessingFrame = false;
+            public void onClick(View view) {
+                Toast.makeText(getApplicationContext(), "Fetching data", Toast.LENGTH_SHORT).show();
+                setUIData(Hum, Alt, Temp, requestManager);
             }
-          };
-
-      processImage();
-    } catch (final Exception e) {
-      LOGGER.e(e, "Exception!");
-      Trace.endSection();
-      return;
-    }
-    Trace.endSection();
-  }
-
-  @Override
-  public synchronized void onStart() {
-    LOGGER.d("onStart " + this);
-    super.onStart();
-  }
-
-  @Override
-  public synchronized void onResume() {
-    LOGGER.d("onResume " + this);
-    super.onResume();
-
-    handlerThread = new HandlerThread("inference");
-    handlerThread.start();
-    handler = new Handler(handlerThread.getLooper());
-  }
-
-  @Override
-  public synchronized void onPause() {
-    LOGGER.d("onPause " + this);
-
-    if (!isFinishing()) {
-      LOGGER.d("Requesting finish");
-      finish();
+        });
+        if (hasPermission()) {
+            setFragment();
+        } else {
+            requestPermission();
+        }
     }
 
-    handlerThread.quitSafely();
-    try {
-      handlerThread.join();
-      handlerThread = null;
-      handler = null;
-    } catch (final InterruptedException e) {
-      LOGGER.e(e, "Exception!");
+    private void setUIData(final TextView Hum, final TextView Alt, final TextView Temp, final RequestManager requestManager) {
+        fusedLocationClient.getLastLocation()
+                .addOnSuccessListener(this, new OnSuccessListener<Location>() {
+                    @Override
+                    public void onSuccess(Location location) {
+
+                        // Got last known location. In some rare situations this can be null.
+                        if (location != null) {
+
+                            final String urlbase = "http://api.openweathermap.org/data/2.5/forecast/?lat=%s&lon=%s&APPID=%s";
+                            String finalUrl = String.format(urlbase, location.getLatitude(), location.getLongitude(), getString(R.string.OPEN_WEATHER_MAP_API_KEY));
+                            JsonObjectRequest request = new JsonObjectRequest(Request.Method.GET, finalUrl, null, new Response.Listener<JSONObject>() {
+                                @Override
+                                public void onResponse(JSONObject response) {
+                                  Gson gson= new Gson();
+                                  Weather w=gson.fromJson(response.toString(), Weather.class);
+                                  Temp.setText(w.getList().get(0).getMain().getTemp()+"°C");
+                                  Hum.setText(w.getList().get(0).getMain().getHumidity()+"%");
+                                  Alt.setText(w.getList().get(0).getMain().getSea_level()+" m.s.n.m");
+                                }
+                            }, new Response.ErrorListener() {
+                                @Override
+                                public void onErrorResponse(VolleyError error) {
+                                    // Add error handling here
+                                    Log.v(TAG, error.getMessage());
+                                }
+                            });
+                            requestManager.addToRequestQueue(request);
+
+                        }
+                    }
+
+                });
+
     }
 
-    super.onPause();
-  }
+    private byte[] lastPreviewFrame;
 
-  @Override
-  public synchronized void onStop() {
-    LOGGER.d("onStop " + this);
-    super.onStop();
-  }
-
-  @Override
-  public synchronized void onDestroy() {
-    LOGGER.d("onDestroy " + this);
-    super.onDestroy();
-  }
-
-  protected synchronized void runInBackground(final Runnable r) {
-    if (handler != null) {
-      handler.post(r);
+    protected int[] getRgbBytes() {
+        imageConverter.run();
+        return rgbBytes;
     }
-  }
 
-  @Override
-  public void onRequestPermissionsResult(
-      final int requestCode, final String[] permissions, final int[] grantResults) {
-    if (requestCode == PERMISSIONS_REQUEST) {
-      if (grantResults.length > 0
-          && grantResults[0] == PackageManager.PERMISSION_GRANTED
-          && grantResults[1] == PackageManager.PERMISSION_GRANTED) {
-        setFragment();
-      } else {
-        requestPermission();
-      }
+    protected int getLuminanceStride() {
+        return yRowStride;
     }
-  }
 
-  private boolean hasPermission() {
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-      return checkSelfPermission(PERMISSION_CAMERA) == PackageManager.PERMISSION_GRANTED &&
-          checkSelfPermission(PERMISSION_STORAGE) == PackageManager.PERMISSION_GRANTED;
-    } else {
-      return true;
+    protected byte[] getLuminance() {
+        return yuvBytes[0];
     }
-  }
 
-  private void requestPermission() {
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-      if (shouldShowRequestPermissionRationale(PERMISSION_CAMERA) ||
-          shouldShowRequestPermissionRationale(PERMISSION_STORAGE)) {
-        Toast.makeText(CameraActivity.this,
-            "Camera AND storage permission are required for this demo", Toast.LENGTH_LONG).show();
-      }
-      requestPermissions(new String[] {PERMISSION_CAMERA, PERMISSION_STORAGE}, PERMISSIONS_REQUEST);
-    }
-  }
-
-  // Returns true if the device supports the required hardware level, or better.
-  private boolean isHardwareLevelSupported(
-      CameraCharacteristics characteristics, int requiredLevel) {
-    int deviceLevel = characteristics.get(CameraCharacteristics.INFO_SUPPORTED_HARDWARE_LEVEL);
-    if (deviceLevel == CameraCharacteristics.INFO_SUPPORTED_HARDWARE_LEVEL_LEGACY) {
-      return requiredLevel == deviceLevel;
-    }
-    // deviceLevel is not LEGACY, can use numerical sort
-    return requiredLevel <= deviceLevel;
-  }
-
-  private String chooseCamera() {
-    final CameraManager manager = (CameraManager) getSystemService(Context.CAMERA_SERVICE);
-    try {
-      for (final String cameraId : manager.getCameraIdList()) {
-        final CameraCharacteristics characteristics = manager.getCameraCharacteristics(cameraId);
-
-        // We don't use a front facing camera in this sample.
-        final Integer facing = characteristics.get(CameraCharacteristics.LENS_FACING);
-        if (facing != null && facing == CameraCharacteristics.LENS_FACING_FRONT) {
-          continue;
+    /**
+     * Callback for android.hardware.Camera API
+     */
+    @Override
+    public void onPreviewFrame(final byte[] bytes, final Camera camera) {
+        if (isProcessingFrame) {
+            LOGGER.w("Dropping frame!");
+            return;
         }
 
-        final StreamConfigurationMap map =
-            characteristics.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP);
-
-        if (map == null) {
-          continue;
+        try {
+            // Initialize the storage bitmaps once when the resolution is known.
+            if (rgbBytes == null) {
+                Camera.Size previewSize = camera.getParameters().getPreviewSize();
+                previewHeight = previewSize.height;
+                previewWidth = previewSize.width;
+                rgbBytes = new int[previewWidth * previewHeight];
+                onPreviewSizeChosen(new Size(previewSize.width, previewSize.height), 90);
+            }
+        } catch (final Exception e) {
+            LOGGER.e(e, "Exception!");
+            return;
         }
 
-        // Fallback to camera1 API for internal cameras that don't have full support.
-        // This should help with legacy situations where using the camera2 API causes
-        // distorted or otherwise broken previews.
-        useCamera2API = (facing == CameraCharacteristics.LENS_FACING_EXTERNAL)
-            || isHardwareLevelSupported(characteristics, 
-                                        CameraCharacteristics.INFO_SUPPORTED_HARDWARE_LEVEL_FULL);
-        LOGGER.i("Camera API lv2?: %s", useCamera2API);
-        return cameraId;
-      }
-    } catch (CameraAccessException e) {
-      LOGGER.e(e, "Not allowed to access camera");
+        isProcessingFrame = true;
+        lastPreviewFrame = bytes;
+        yuvBytes[0] = bytes;
+        yRowStride = previewWidth;
+
+        imageConverter =
+                new Runnable() {
+                    @Override
+                    public void run() {
+                        ImageUtils.convertYUV420SPToARGB8888(bytes, previewWidth, previewHeight, rgbBytes);
+                    }
+                };
+
+        postInferenceCallback =
+                new Runnable() {
+                    @Override
+                    public void run() {
+                        camera.addCallbackBuffer(bytes);
+                        isProcessingFrame = false;
+                    }
+                };
+        processImage();
     }
 
-    return null;
-  }
+    /**
+     * Callback for Camera2 API
+     */
+    @Override
+    public void onImageAvailable(final ImageReader reader) {
+        //We need wait until we have some size from onPreviewSizeChosen
+        if (previewWidth == 0 || previewHeight == 0) {
+            return;
+        }
+        if (rgbBytes == null) {
+            rgbBytes = new int[previewWidth * previewHeight];
+        }
+        try {
+            final Image image = reader.acquireLatestImage();
 
-  protected void setFragment() {
-    String cameraId = chooseCamera();
-    if (cameraId == null) {
-      Toast.makeText(this, "No Camera Detected", Toast.LENGTH_SHORT).show();
-      finish();
+            if (image == null) {
+                return;
+            }
+
+            if (isProcessingFrame) {
+                image.close();
+                return;
+            }
+            isProcessingFrame = true;
+            Trace.beginSection("imageAvailable");
+            final Plane[] planes = image.getPlanes();
+            fillBytes(planes, yuvBytes);
+            yRowStride = planes[0].getRowStride();
+            final int uvRowStride = planes[1].getRowStride();
+            final int uvPixelStride = planes[1].getPixelStride();
+
+            imageConverter =
+                    new Runnable() {
+                        @Override
+                        public void run() {
+                            ImageUtils.convertYUV420ToARGB8888(
+                                    yuvBytes[0],
+                                    yuvBytes[1],
+                                    yuvBytes[2],
+                                    previewWidth,
+                                    previewHeight,
+                                    yRowStride,
+                                    uvRowStride,
+                                    uvPixelStride,
+                                    rgbBytes);
+                        }
+                    };
+
+            postInferenceCallback =
+                    new Runnable() {
+                        @Override
+                        public void run() {
+                            image.close();
+                            isProcessingFrame = false;
+                        }
+                    };
+
+            processImage();
+        } catch (final Exception e) {
+            LOGGER.e(e, "Exception!");
+            Trace.endSection();
+            return;
+        }
+        Trace.endSection();
     }
 
-    Fragment fragment;
-    if (useCamera2API) {
-      CameraConnectionFragment camera2Fragment =
-          CameraConnectionFragment.newInstance(
-              new CameraConnectionFragment.ConnectionCallback() {
-                @Override
-                public void onPreviewSizeChosen(final Size size, final int rotation) {
-                  previewHeight = size.getHeight();
-                  previewWidth = size.getWidth();
-                  CameraActivity.this.onPreviewSizeChosen(size, rotation);
+    @Override
+    public synchronized void onStart() {
+        LOGGER.d("onStart " + this);
+        super.onStart();
+    }
+
+    @Override
+    public synchronized void onResume() {
+        LOGGER.d("onResume " + this);
+        super.onResume();
+
+        handlerThread = new HandlerThread("inference");
+        handlerThread.start();
+        handler = new Handler(handlerThread.getLooper());
+    }
+
+    @Override
+    public synchronized void onPause() {
+        LOGGER.d("onPause " + this);
+
+        if (!isFinishing()) {
+            LOGGER.d("Requesting finish");
+            finish();
+        }
+
+        handlerThread.quitSafely();
+        try {
+            handlerThread.join();
+            handlerThread = null;
+            handler = null;
+        } catch (final InterruptedException e) {
+            LOGGER.e(e, "Exception!");
+        }
+
+        super.onPause();
+    }
+
+    @Override
+    public synchronized void onStop() {
+        LOGGER.d("onStop " + this);
+        super.onStop();
+    }
+
+    @Override
+    public synchronized void onDestroy() {
+        LOGGER.d("onDestroy " + this);
+        super.onDestroy();
+    }
+
+    protected synchronized void runInBackground(final Runnable r) {
+        if (handler != null) {
+            handler.post(r);
+        }
+    }
+
+    @Override
+    public void onRequestPermissionsResult(
+            final int requestCode, final String[] permissions, final int[] grantResults) {
+        if (requestCode == PERMISSIONS_REQUEST) {
+            if (grantResults.length > 0
+                    && grantResults[0] == PackageManager.PERMISSION_GRANTED
+                    && grantResults[1] == PackageManager.PERMISSION_GRANTED) {
+                setFragment();
+            } else {
+                requestPermission();
+            }
+        }
+    }
+
+    private boolean hasPermission() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            return checkSelfPermission(PERMISSION_CAMERA) == PackageManager.PERMISSION_GRANTED &&
+                    checkSelfPermission(PERMISSION_STORAGE) == PackageManager.PERMISSION_GRANTED;
+        } else {
+            return true;
+        }
+    }
+
+    private void requestPermission() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            if (shouldShowRequestPermissionRationale(PERMISSION_CAMERA) ||
+                    shouldShowRequestPermissionRationale(PERMISSION_STORAGE) || shouldShowRequestPermissionRationale(PERMISSION_LOCATION)) {
+                Toast.makeText(CameraActivity.this,
+                        "Garantice todos los permisos", Toast.LENGTH_LONG).show();
+            }
+            requestPermissions(new String[]{PERMISSION_CAMERA, PERMISSION_STORAGE, PERMISSION_LOCATION}, PERMISSIONS_REQUEST);
+        }
+
+    }
+
+    // Returns true if the device supports the required hardware level, or better.
+    private boolean isHardwareLevelSupported(
+            CameraCharacteristics characteristics, int requiredLevel) {
+        int deviceLevel = characteristics.get(CameraCharacteristics.INFO_SUPPORTED_HARDWARE_LEVEL);
+        if (deviceLevel == CameraCharacteristics.INFO_SUPPORTED_HARDWARE_LEVEL_LEGACY) {
+            return requiredLevel == deviceLevel;
+        }
+        // deviceLevel is not LEGACY, can use numerical sort
+        return requiredLevel <= deviceLevel;
+    }
+
+    private String chooseCamera() {
+        final CameraManager manager = (CameraManager) getSystemService(Context.CAMERA_SERVICE);
+        try {
+            for (final String cameraId : manager.getCameraIdList()) {
+                final CameraCharacteristics characteristics = manager.getCameraCharacteristics(cameraId);
+
+                // We don't use a front facing camera in this sample.
+                final Integer facing = characteristics.get(CameraCharacteristics.LENS_FACING);
+                if (facing != null && facing == CameraCharacteristics.LENS_FACING_FRONT) {
+                    continue;
                 }
-              },
-              this,
-              getLayoutId(),
-              getDesiredPreviewFrameSize());
 
-      camera2Fragment.setCamera(cameraId);
-      fragment = camera2Fragment;
-    } else {
-      fragment =
-          new LegacyCameraConnectionFragment(this, getLayoutId(), getDesiredPreviewFrameSize());
+                final StreamConfigurationMap map =
+                        characteristics.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP);
+
+                if (map == null) {
+                    continue;
+                }
+
+                // Fallback to camera1 API for internal cameras that don't have full support.
+                // This should help with legacy situations where using the camera2 API causes
+                // distorted or otherwise broken previews.
+                useCamera2API = (facing == CameraCharacteristics.LENS_FACING_EXTERNAL)
+                        || isHardwareLevelSupported(characteristics,
+                        CameraCharacteristics.INFO_SUPPORTED_HARDWARE_LEVEL_FULL);
+                LOGGER.i("Camera API lv2?: %s", useCamera2API);
+                return cameraId;
+            }
+        } catch (CameraAccessException e) {
+            LOGGER.e(e, "Not allowed to access camera");
+        }
+
+        return null;
     }
 
-    getFragmentManager()
-        .beginTransaction()
-        .replace(R.id.container, fragment)
-        .commit();
-  }
+    protected void setFragment() {
+        String cameraId = chooseCamera();
+        if (cameraId == null) {
+            Toast.makeText(this, "No Camera Detected", Toast.LENGTH_SHORT).show();
+            finish();
+        }
 
-  protected void fillBytes(final Plane[] planes, final byte[][] yuvBytes) {
-    // Because of the variable row stride it's not possible to know in
-    // advance the actual necessary dimensions of the yuv planes.
-    for (int i = 0; i < planes.length; ++i) {
-      final ByteBuffer buffer = planes[i].getBuffer();
-      if (yuvBytes[i] == null) {
-        LOGGER.d("Initializing buffer %d at size %d", i, buffer.capacity());
-        yuvBytes[i] = new byte[buffer.capacity()];
-      }
-      buffer.get(yuvBytes[i]);
+        Fragment fragment;
+        if (useCamera2API) {
+            CameraConnectionFragment camera2Fragment =
+                    CameraConnectionFragment.newInstance(
+                            new CameraConnectionFragment.ConnectionCallback() {
+                                @Override
+                                public void onPreviewSizeChosen(final Size size, final int rotation) {
+                                    previewHeight = size.getHeight();
+                                    previewWidth = size.getWidth();
+                                    CameraActivity.this.onPreviewSizeChosen(size, rotation);
+                                }
+                            },
+                            this,
+                            getLayoutId(),
+                            getDesiredPreviewFrameSize());
+
+            camera2Fragment.setCamera(cameraId);
+            fragment = camera2Fragment;
+        } else {
+            fragment =
+                    new LegacyCameraConnectionFragment(this, getLayoutId(), getDesiredPreviewFrameSize());
+        }
+
+        getFragmentManager()
+                .beginTransaction()
+                .replace(R.id.container, fragment)
+                .commit();
     }
-  }
 
-  public boolean isDebug() {
-    return debug;
-  }
-
-  public void requestRender() {
-    final OverlayView overlay = (OverlayView) findViewById(R.id.debug_overlay);
-    if (overlay != null) {
-      overlay.postInvalidate();
+    protected void fillBytes(final Plane[] planes, final byte[][] yuvBytes) {
+        // Because of the variable row stride it's not possible to know in
+        // advance the actual necessary dimensions of the yuv planes.
+        for (int i = 0; i < planes.length; ++i) {
+            final ByteBuffer buffer = planes[i].getBuffer();
+            if (yuvBytes[i] == null) {
+                LOGGER.d("Initializing buffer %d at size %d", i, buffer.capacity());
+                yuvBytes[i] = new byte[buffer.capacity()];
+            }
+            buffer.get(yuvBytes[i]);
+        }
     }
-  }
 
-  public void addCallback(final OverlayView.DrawCallback callback) {
-    final OverlayView overlay = (OverlayView) findViewById(R.id.debug_overlay);
-    if (overlay != null) {
-      overlay.addCallback(callback);
+    public boolean isDebug() {
+        return debug;
     }
-  }
 
-  public void onSetDebug(final boolean debug) {}
-
-  @Override
-  public boolean onKeyDown(final int keyCode, final KeyEvent event) {
-    if (keyCode == KeyEvent.KEYCODE_VOLUME_DOWN || keyCode == KeyEvent.KEYCODE_VOLUME_UP
-            || keyCode == KeyEvent.KEYCODE_BUTTON_L1 || keyCode == KeyEvent.KEYCODE_DPAD_CENTER) {
-      debug = !debug;
-      requestRender();
-      onSetDebug(debug);
-      return true;
+    public void requestRender() {
+        final OverlayView overlay = findViewById(R.id.debug_overlay);
+        if (overlay != null) {
+            overlay.postInvalidate();
+        }
     }
-    return super.onKeyDown(keyCode, event);
-  }
 
-  protected void readyForNextImage() {
-    if (postInferenceCallback != null) {
-      postInferenceCallback.run();
+    public void addCallback(final OverlayView.DrawCallback callback) {
+        final OverlayView overlay = findViewById(R.id.debug_overlay);
+        if (overlay != null) {
+            overlay.addCallback(callback);
+        }
     }
-  }
 
-  protected int getScreenOrientation() {
-    switch (getWindowManager().getDefaultDisplay().getRotation()) {
-      case Surface.ROTATION_270:
-        return 270;
-      case Surface.ROTATION_180:
-        return 180;
-      case Surface.ROTATION_90:
-        return 90;
-      default:
-        return 0;
+    public void onSetDebug(final boolean debug) {
     }
-  }
 
-  protected abstract void processImage();
+    @Override
+    public boolean onKeyDown(final int keyCode, final KeyEvent event) {
+        if (keyCode == KeyEvent.KEYCODE_VOLUME_DOWN || keyCode == KeyEvent.KEYCODE_VOLUME_UP
+                || keyCode == KeyEvent.KEYCODE_BUTTON_L1 || keyCode == KeyEvent.KEYCODE_DPAD_CENTER) {
+            debug = !debug;
+            requestRender();
+            onSetDebug(debug);
+            return true;
+        }
+        return super.onKeyDown(keyCode, event);
+    }
 
-  protected abstract void onPreviewSizeChosen(final Size size, final int rotation);
-  protected abstract int getLayoutId();
-  protected abstract Size getDesiredPreviewFrameSize();
+    protected void readyForNextImage() {
+        if (postInferenceCallback != null) {
+            postInferenceCallback.run();
+        }
+    }
+
+    protected int getScreenOrientation() {
+        switch (getWindowManager().getDefaultDisplay().getRotation()) {
+            case Surface.ROTATION_270:
+                return 270;
+            case Surface.ROTATION_180:
+                return 180;
+            case Surface.ROTATION_90:
+                return 90;
+            default:
+                return 0;
+        }
+    }
+
+    protected abstract void processImage();
+
+    protected abstract void onPreviewSizeChosen(final Size size, final int rotation);
+
+    protected abstract int getLayoutId();
+
+    protected abstract Size getDesiredPreviewFrameSize();
 }
